@@ -7,8 +7,12 @@ import { MercadoPagoConfig, Preference, Payment } from "mercadopago";
 
 import authRoutes from "./src/routes/auth.js";
 import adminUsersRoutes from "./src/routes/adminUsers.js";
+import adminTicketsRoutes from "./src/routes/adminTickets.js";
+import publicTicketsRoutes from "./src/routes/publicTickets.js";
+
 import User from "./src/models/User.js";
 import Order from "./src/models/Orders.js";
+import TicketType from "./src/models/TicketType.js";
 
 const app = express();
 
@@ -22,6 +26,9 @@ app.get("/health", (req, res) =>
 
 app.use("/auth", authRoutes);
 app.use("/admin/users", adminUsersRoutes);
+
+app.use("/admin/tickets", adminTicketsRoutes);
+app.use("/tickets", publicTicketsRoutes);
 
 app.get("/orders/:orderId", async (req, res) => {
   const { orderId } = req.params;
@@ -45,17 +52,36 @@ const mpClient = new MercadoPagoConfig({
 
 app.post("/mp/create-preference", async (req, res) => {
   try {
-    const { title = "Entrada General", unit_price = 10, quantity = 1, buyer_email } = req.body || {};
+    const { ticketId, quantity = 1, buyer_email } = req.body || {};
+    const qty = Number(quantity);
+
+    if (!ticketId) return res.status(400).json({ error: "missing_ticketId" });
+    if (!Number.isInteger(qty) || qty < 1 || qty > 3) {
+      return res.status(400).json({ error: "invalid_quantity" });
+    }
+
+    const ticket = await TicketType.findById(ticketId).lean();
+    if (!ticket || ticket.active === false) {
+      return res.status(404).json({ error: "ticket_not_found" });
+    }
+
+    // No descontamos acá, pero validamos stock para evitar vender de más
+    if (ticket.stock < qty) {
+      return res.status(400).json({ error: "no_stock" });
+    }
+
     const orderId = `ORDER_${Date.now()}`;
 
     await Order.create({
       orderId,
-      title,
-      unit_price: Number(unit_price),
-      quantity: Number(quantity),
+      ticketId: ticket._id,
+      title: ticket.name,
+      unit_price: Number(ticket.priceARS),
+      quantity: qty,
       buyer_email: buyer_email || null,
       status: "created",
       currency_id: "ARS",
+      // stockDeducted: false, // opcional (si tu schema tiene default, no hace falta)
     });
 
     const preference = new Preference(mpClient);
@@ -65,9 +91,9 @@ app.post("/mp/create-preference", async (req, res) => {
       body: {
         items: [
           {
-            title,
-            quantity: Number(quantity),
-            unit_price: Number(unit_price),
+            title: ticket.name,
+            quantity: qty,
+            unit_price: Number(ticket.priceARS),
             currency_id: "ARS",
           },
         ],
@@ -109,14 +135,20 @@ app.post("/mp/create-preference", async (req, res) => {
 });
 
 app.post("/mp/webhook", async (req, res) => {
+  // Mercado Pago espera 200 rápido
   res.sendStatus(200);
 
   try {
-    const topic = req.query?.type || req.query?.topic || req.body?.type || req.body?.topic;
+    const topic =
+      req.query?.type || req.query?.topic || req.body?.type || req.body?.topic;
     if (topic && topic !== "payment") return;
 
     const paymentId =
-      req.query?.["data.id"] || req.query?.id || req.body?.data?.id || req.body?.id || req.body?.resource;
+      req.query?.["data.id"] ||
+      req.query?.id ||
+      req.body?.data?.id ||
+      req.body?.id ||
+      req.body?.resource;
 
     if (!paymentId) return;
 
@@ -126,17 +158,58 @@ app.post("/mp/webhook", async (req, res) => {
     const orderId = paymentInfo.external_reference;
     if (!orderId) return;
 
-    // Deduplicación: mismo paymentId y mismo status => ignorar
     const existing = await Order.findOne({ orderId }).lean();
-    if (existing?.paymentId === String(paymentInfo.id) && existing?.status === paymentInfo.status) {
+    if (!existing) return;
+
+    // Deduplicación: mismo paymentId y mismo status => ignorar
+    if (
+      existing.paymentId === String(paymentInfo.id) &&
+      existing.status === paymentInfo.status
+    ) {
       return;
     }
+
+    const newStatus = paymentInfo.status || "unknown";
+
+    // ===== DESCUENTO DE STOCK IDEMPOTENTE (ANTI DOBLE WEBHOOK) =====
+    // OJO: esto requiere que el schema de Order tenga el campo:
+    // stockDeducted: { type: Boolean, default: false }
+    if (newStatus === "approved") {
+      // Solo el primer webhook que logre setear stockDeducted=true va a descontar.
+      const reserved = await Order.findOneAndUpdate(
+        { orderId, stockDeducted: { $ne: true } },
+        { $set: { stockDeducted: true } },
+        { new: false } // si devuelve null => ya estaba descontado
+      ).exec();
+
+      if (reserved) {
+        if (
+          reserved.ticketId &&
+          Number.isInteger(reserved.quantity) &&
+          reserved.quantity > 0
+        ) {
+          const dec = await TicketType.updateOne(
+            { _id: reserved.ticketId, stock: { $gte: reserved.quantity } },
+            { $inc: { stock: -reserved.quantity } }
+          ).exec();
+
+          if (dec.modifiedCount !== 1) {
+            console.error("[mp] stock_not_enough_on_approval", {
+              orderId,
+              ticketId: String(reserved.ticketId),
+              qty: reserved.quantity,
+            });
+          }
+        }
+      }
+    }
+    // ===============================================================
 
     await Order.updateOne(
       { orderId },
       {
         $set: {
-          status: paymentInfo.status || "unknown",
+          status: newStatus,
           paymentId: String(paymentInfo.id),
           live_mode: Boolean(paymentInfo.live_mode),
           transaction_amount: paymentInfo.transaction_amount ?? null,
@@ -174,7 +247,12 @@ async function ensureSuperAdmin() {
   }
 
   const passwordHash = await bcrypt.hash(password, 10);
-  await User.create({ username, passwordHash, role: "SUPER_ADMIN", active: true });
+  await User.create({
+    username,
+    passwordHash,
+    role: "SUPER_ADMIN",
+    active: true,
+  });
   console.log(`[seed] SUPER_ADMIN created (${username})`);
 }
 
@@ -182,7 +260,9 @@ async function start() {
   try {
     if (!process.env.MONGO_URI) throw new Error("Missing MONGO_URI in .env");
     if (!process.env.JWT_SECRET) throw new Error("Missing JWT_SECRET in .env");
-    if (!process.env.MP_ACCESS_TOKEN) throw new Error("Missing MP_ACCESS_TOKEN in .env");
+    if (!process.env.MP_ACCESS_TOKEN) {
+      throw new Error("Missing MP_ACCESS_TOKEN in .env");
+    }
 
     await mongoose.connect(process.env.MONGO_URI);
     console.log("[db] connected");
@@ -190,7 +270,9 @@ async function start() {
     await ensureSuperAdmin();
 
     const PORT = process.env.PORT || 3001;
-    app.listen(PORT, () => console.log(`Backend escuchando en http://localhost:${PORT}`));
+    app.listen(PORT, () =>
+      console.log(`Backend escuchando en http://localhost:${PORT}`)
+    );
   } catch (e) {
     console.error("[startup] error:", e);
     process.exit(1);

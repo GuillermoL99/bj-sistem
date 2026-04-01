@@ -75,4 +75,32 @@ router.patch("/:id", async (req, res) => {
   }
 });
 
+router.delete("/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Evitar auto-eliminarse
+    if (String(req.user.id) === String(id)) {
+      return res.status(400).json({ error: "cannot_delete_self" });
+    }
+
+    const user = await User.findById(id).lean();
+    if (!user) return res.status(404).json({ error: "user_not_found" });
+
+    // Evitar eliminar el último SUPER_ADMIN
+    if (user.role === "SUPER_ADMIN") {
+      const superAdminsCount = await User.countDocuments({ role: "SUPER_ADMIN" }).exec();
+      if (superAdminsCount <= 1) {
+        return res.status(400).json({ error: "cannot_delete_last_super_admin" });
+      }
+    }
+
+    await User.deleteOne({ _id: id }).exec();
+    res.json({ ok: true });
+  } catch (e) {
+    console.error("[adminUsers] delete error:", e);
+    res.status(500).json({ error: "server_error" });
+  }
+});
+
 export default router;

@@ -1,11 +1,22 @@
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import Layout from "../components/Layout";
 import Card from "../components/Card";
 import Button from "../components/Button";
 import { createPreference } from "../api/mp";
 
 export default function Home() {
+  // IMPORTANTE:
+  // 1) Creá un TicketType en tu DB (desde admin más adelante o directo en Mongo).
+  // 2) Copiá su "id" (ObjectId) y pegalo acá.
+  const TICKET_ID = "69cce18fbb6b9de5728e4ac0";
+
+  // Por ahora dejamos estos hardcodeados para no complicar la UI todavía.
+  // Más adelante los vamos a traer desde GET /tickets.
   const UNIT_PRICE = 10; // ARS
+  const PRODUCT_NAME = "Entrada General";
+
+  const nav = useNavigate();
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -22,10 +33,16 @@ export default function Home() {
   async function pagar() {
     setLoading(true);
     setError(null);
+
     try {
+      if (!TICKET_ID || TICKET_ID === "blablabla") {
+        throw new Error(
+          "Falta configurar TICKET_ID en Home.jsx. Pegá el id de tu entrada (TicketType) desde Mongo o desde GET /tickets."
+        );
+      }
+
       const data = await createPreference({
-        title: "Entrada General",
-        unit_price: UNIT_PRICE,
+        ticketId: TICKET_ID,
         quantity,
         buyer_email: "comprador@test.com",
       });
@@ -44,18 +61,19 @@ export default function Home() {
     }
   }
 
+  function goToAdminLogin() {
+    nav("/admin/login");
+  }
+
   return (
     <Layout>
       <div className="grid">
-        <Card
-          title="Entradas"
-          subtitle="Compra rápida. El estado se confirma por webhook."
-        >
+        <Card title="Entradas">
           <div className="hr" />
 
           <div className="row">
             <div className="label">Producto</div>
-            <div className="value">Entrada General</div>
+            <div className="value">{PRODUCT_NAME}</div>
           </div>
 
           <div className="row">
@@ -84,8 +102,8 @@ export default function Home() {
               <button
                 className="btn"
                 type="button"
-                onClick={() => setQuantity((q) => Math.min(6, q + 1))}
-                disabled={loading || quantity === 6}
+                onClick={() => setQuantity((q) => Math.min(3, q + 1))}
+                disabled={loading || quantity === 3}
                 aria-label="Aumentar cantidad"
               >
                 +
@@ -100,12 +118,16 @@ export default function Home() {
 
           <div className="hr" />
 
-          <Button variant="primary" onClick={pagar} disabled={loading}>
-            {loading ? "Creando pago..." : "Pagar con Mercado Pago"}
-          </Button>
+          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+            <div style={{ flex: 1 }}>
+              <Button variant="primary" onClick={pagar} disabled={loading}>
+                {loading ? "Creando pago..." : "Pagar con Mercado Pago"}
+              </Button>
+            </div>
+          </div>
 
           <p style={{ marginTop: 12, marginBottom: 0, color: "var(--muted)" }}>
-            Máximo 6 entradas por compra.
+            Máximo 3 entradas por compra.
           </p>
 
           {error && (
@@ -114,25 +136,20 @@ export default function Home() {
               <div className="mono">{error}</div>
             </div>
           )}
-        </Card>
 
-        <Card
-          title="Tu última orden"
-          subtitle="Si cerrás Mercado Pago, podés volver y ver el estado."
-        >
-          {lastOrderId ? (
-            <div className="notice" style={{ marginTop: 10 }}>
-              <div className="label">orderId</div>
-              <div className="mono">{lastOrderId}</div>
-              <div style={{ marginTop: 10 }}>
-                <a href={`/success`} style={{ color: "var(--text)" }}>
-                  Ver estado →
-                </a>
-              </div>
-            </div>
-          ) : (
-            <p style={{ marginTop: 10 }}>Todavía no generaste una orden.</p>
+          {/* Si querés, esto lo podés usar para debug */}
+          {lastOrderId && (
+            <p style={{ marginTop: 12, marginBottom: 0, color: "var(--muted)" }}>
+              Última orden: <span className="mono">{lastOrderId}</span>
+            </p>
           )}
+
+          {/* Botón/atajo al login admin (si lo estabas usando antes) */}
+          <div style={{ marginTop: 12 }}>
+            <button className="btn" type="button" onClick={goToAdminLogin}>
+              Admin
+            </button>
+          </div>
         </Card>
       </div>
     </Layout>

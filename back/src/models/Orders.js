@@ -4,6 +4,13 @@ const orderSchema = new mongoose.Schema(
   {
     orderId: { type: String, required: true, unique: true, index: true },
 
+    // NUEVO: referencia a tipo de entrada
+    ticketId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "TicketType",
+      default: null,
+    },
+
     title: { type: String, default: null },
     unit_price: { type: Number, default: null },
     quantity: { type: Number, default: null },
@@ -13,9 +20,20 @@ const orderSchema = new mongoose.Schema(
 
     status: {
       type: String,
-      enum: ["created", "pending", "approved", "rejected", "refunded", "cancelled", "unknown"],
+      enum: [
+        "created",
+        "pending",
+        "approved",
+        "rejected",
+        "refunded",
+        "cancelled",
+        "unknown",
+      ],
       default: "created",
     },
+
+    // IMPORTANTE: para que el webhook no descuente stock 2 veces
+    stockDeducted: { type: Boolean, default: false },
 
     paymentId: { type: String, default: null },
     live_mode: { type: Boolean, default: null },

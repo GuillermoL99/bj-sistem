@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
-import { Link, Outlet, useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { apiFetch, clearToken, getToken } from "../../lib/api";
 
 export default function AdminLayout() {
   const nav = useNavigate();
+  const location = useLocation();
   const [me, setMe] = useState(null);
 
   useEffect(() => {
@@ -25,29 +26,84 @@ export default function AdminLayout() {
     load();
   }, [nav]);
 
-  if (!me) return <div style={{ padding: 20 }}>Cargando...</div>;
+  const homePath = useMemo(() => {
+    if (!me) return "/admin/login";
+    return me.role === "SUPER_ADMIN" ? "/admin/users" : "/admin/scan";
+  }, [me]);
+
+  // Guard: si STAFF intenta entrar a users, redirigirlo
+  useEffect(() => {
+    if (!me) return;
+    if (me.role !== "SUPER_ADMIN" && location.pathname.startsWith("/admin/users")) {
+      nav("/admin/scan", { replace: true });
+    }
+  }, [me, location.pathname, nav]);
+
+  if (!me) {
+    return (
+      <div className="container">
+        <div className="adminShell">
+          <div className="notice">Cargando panel...</div>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div style={{ padding: 20 }}>
-      <header style={{ display: "flex", justifyContent: "space-between", marginBottom: 16 }}>
-        <div>
-          <strong>Admin</strong> — {me.username} ({me.role})
-        </div>
+    <div className="container">
+      <div className="adminShell">
+        <header className="adminHeader">
+          <div className="adminTitle">
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <Link to={homePath} className="adminLink" style={{ textDecoration: "none" }}>
+                Admin
+              </Link>
 
-        <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-          <Link to="/admin/users">Usuarios</Link>
-          <button
-            onClick={() => {
-              clearToken();
-              nav("/admin/login", { replace: true });
-            }}
-          >
-            Salir
-          </button>
-        </div>
-      </header>
+              <span className={`badge ${me.role === "SUPER_ADMIN" ? "warn" : "ok"}`}>
+                <span className="dot" />
+                {me.role}
+              </span>
 
-      <Outlet context={{ me }} />
+              <span className="mono" style={{ color: "var(--muted)" }}>
+                {me.username}
+              </span>
+            </div>
+
+            <div className="adminSubtitle">
+              {me.role === "SUPER_ADMIN"
+                ? "Gestión y mantenimiento del sistema."
+                : "Escaneo y validación de entradas."}
+            </div>
+          </div>
+
+          <nav className="adminNav">
+            {me.role === "SUPER_ADMIN" ? (
+              <Link className={location.pathname.startsWith("/admin/users") ? "adminLink active" : "adminLink"} to="/admin/users">
+                Usuarios
+              </Link>
+            ) : (
+              <Link className={location.pathname.startsWith("/admin/scan") ? "adminLink active" : "adminLink"} to="/admin/scan">
+                Escanear
+              </Link>
+            )}
+
+            <button
+              type="button"
+              className="btn adminLogout"
+              onClick={() => {
+                clearToken();
+                nav("/admin/login", { replace: true });
+              }}
+            >
+              Salir
+            </button>
+          </nav>
+        </header>
+
+        <div className="adminContent">
+          <Outlet context={{ me }} />
+        </div>
+      </div>
     </div>
   );
 }
