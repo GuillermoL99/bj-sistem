@@ -1,72 +1,65 @@
 import express from "express";
 import cors from "cors";
 import "dotenv/config";
+import mongoose from "mongoose";
+import bcrypt from "bcryptjs";
 import { MercadoPagoConfig, Preference, Payment } from "mercadopago";
+
+import authRoutes from "./src/routes/auth.js";
+import adminUsersRoutes from "./src/routes/adminUsers.js";
+import User from "./src/models/User.js";
+import Order from "./src/models/Orders.js";
 
 const app = express();
 
 app.use(cors());
 app.use(express.json());
 
-// ===== "DB" EN MEMORIA (solo para pruebas) =====
-// Se pierde al reiniciar el servidor.
-const orders = new Map(); // key: orderId, value: { ... }
+app.get("/", (req, res) => res.send("OK backend running"));
+app.get("/health", (req, res) =>
+  res.json({ ok: true, service: "backend", date: new Date().toISOString() })
+);
 
-// Opcional: para que no diga "Cannot GET /"
-app.get("/", (req, res) => {
-  res.send("OK backend running");
-});
+app.use("/auth", authRoutes);
+app.use("/admin/users", adminUsersRoutes);
 
-app.get("/health", (req, res) => {
-  res.json({ ok: true, service: "backend", date: new Date().toISOString() });
-});
-
-// ===== API para consultar estado de una orden =====
-app.get("/orders/:orderId", (req, res) => {
+app.get("/orders/:orderId", async (req, res) => {
   const { orderId } = req.params;
-  const order = orders.get(orderId);
 
-  if (!order) {
-    return res.status(404).json({ error: "order_not_found", orderId });
-  }
+  const order = await Order.findOne({ orderId }).lean();
+  if (!order) return res.status(404).json({ error: "order_not_found", orderId });
 
   res.json(order);
 });
 
-// Config Mercado Pago (TOKEN DEL VENDEDOR)
+function buildWebhookUrl() {
+  const base = (process.env.BASE_URL || "").trim().replace(/\/+$/, "");
+  if (!base) return null;
+  if (!base.startsWith("https://")) return null;
+  return `${base}/mp/webhook`;
+}
+
 const mpClient = new MercadoPagoConfig({
   accessToken: process.env.MP_ACCESS_TOKEN,
 });
 
-// Crear preferencia de pago
 app.post("/mp/create-preference", async (req, res) => {
   try {
-    const {
-      title = "Entrada General",
-      unit_price = 10,
-      quantity = 1,
-      buyer_email,
-    } = req.body || {};
-
+    const { title = "Entrada General", unit_price = 10, quantity = 1, buyer_email } = req.body || {};
     const orderId = `ORDER_${Date.now()}`;
 
-    // Guardamos la orden en memoria como "created"
-    orders.set(orderId, {
+    await Order.create({
       orderId,
       title,
       unit_price: Number(unit_price),
       quantity: Number(quantity),
       buyer_email: buyer_email || null,
-      status: "created", // created | pending | approved | rejected | refunded | cancelled | unknown
-      paymentId: null,
-      live_mode: null,
-      transaction_amount: null,
+      status: "created",
       currency_id: "ARS",
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
     });
 
     const preference = new Preference(mpClient);
+    const webhookUrl = buildWebhookUrl();
 
     const result = await preference.create({
       body: {
@@ -79,30 +72,26 @@ app.post("/mp/create-preference", async (req, res) => {
           },
         ],
         payer: buyer_email ? { email: buyer_email } : undefined,
-
-        // IMPORTANTÍSIMO: esto vincula el pago con tu orden
         external_reference: orderId,
-
         back_urls: {
           success: "http://localhost:5173/success",
           pending: "http://localhost:5173/pending",
           failure: "http://localhost:5173/failure",
         },
-
-        // Fuerza el webhook para esta preferencia (ideal con ngrok)
-        notification_url: `${process.env.BASE_URL}/mp/webhook`,
+        notification_url: webhookUrl || undefined,
       },
     });
 
-    // Guardamos info de la preferencia para debug
-    const prev = orders.get(orderId);
-    orders.set(orderId, {
-      ...prev,
-      preferenceId: result.id || null,
-      init_point: result.init_point || null,
-      sandbox_init_point: result.sandbox_init_point || null,
-      updatedAt: new Date().toISOString(),
-    });
+    await Order.updateOne(
+      { orderId },
+      {
+        $set: {
+          preferenceId: result.id || null,
+          init_point: result.init_point || null,
+          sandbox_init_point: result.sandbox_init_point || null,
+        },
+      }
+    );
 
     res.json({
       orderId,
@@ -111,7 +100,7 @@ app.post("/mp/create-preference", async (req, res) => {
       sandbox_init_point: result.sandbox_init_point,
     });
   } catch (err) {
-    console.error("Error creando preferencia:", err);
+    console.error("[mp] Error creando preferencia:", err);
     res.status(500).json({
       error: "Error creando preferencia",
       details: String(err?.message || err),
@@ -119,88 +108,93 @@ app.post("/mp/create-preference", async (req, res) => {
   }
 });
 
-// ===== WEBHOOK MERCADO PAGO =====
 app.post("/mp/webhook", async (req, res) => {
-  // responder rápido para que MP no reintente por timeout
   res.sendStatus(200);
 
   try {
-    const topic =
-      req.query?.type ||
-      req.query?.topic ||
-      req.body?.type ||
-      req.body?.topic;
-
-    console.log("WEBHOOK MP (raw):", {
-      topic,
-      query: req.query,
-      body: req.body,
-    });
-
-    // Ignoramos merchant_order u otros para no ensuciar la consola
-    if (topic && topic !== "payment") {
-      console.log(`WEBHOOK MP: ignorado porque topic=${topic}`);
-      return;
-    }
+    const topic = req.query?.type || req.query?.topic || req.body?.type || req.body?.topic;
+    if (topic && topic !== "payment") return;
 
     const paymentId =
-      req.query?.["data.id"] ||
-      req.query?.id ||
-      req.body?.data?.id ||
-      req.body?.id ||
-      req.body?.resource;
+      req.query?.["data.id"] || req.query?.id || req.body?.data?.id || req.body?.id || req.body?.resource;
 
-    if (!paymentId) {
-      console.log("WEBHOOK MP: no vino paymentId (evento payment)");
-      return;
-    }
+    if (!paymentId) return;
 
     const payment = new Payment(mpClient);
     const paymentInfo = await payment.get({ id: String(paymentId) });
 
-    console.log("WEBHOOK MP (payment):", {
-      id: paymentInfo.id,
-      status: paymentInfo.status,
-      status_detail: paymentInfo.status_detail,
-      external_reference: paymentInfo.external_reference,
-      transaction_amount: paymentInfo.transaction_amount,
-      live_mode: paymentInfo.live_mode,
-    });
-
     const orderId = paymentInfo.external_reference;
+    if (!orderId) return;
 
-    // Si no vino external_reference, no sabemos qué orden actualizar
-    if (!orderId) {
-      console.log("WEBHOOK MP: payment sin external_reference, no se puede asociar a orden");
+    // Deduplicación: mismo paymentId y mismo status => ignorar
+    const existing = await Order.findOne({ orderId }).lean();
+    if (existing?.paymentId === String(paymentInfo.id) && existing?.status === paymentInfo.status) {
       return;
     }
 
-    // Creamos/actualizamos la orden en memoria (idempotente)
-    const existing = orders.get(orderId) || {
-      orderId,
-      title: null,
-      unit_price: null,
-      quantity: null,
-      buyer_email: null,
-      currency_id: null,
-      createdAt: new Date().toISOString(),
-    };
+    await Order.updateOne(
+      { orderId },
+      {
+        $set: {
+          status: paymentInfo.status || "unknown",
+          paymentId: String(paymentInfo.id),
+          live_mode: Boolean(paymentInfo.live_mode),
+          transaction_amount: paymentInfo.transaction_amount ?? null,
+          lastWebhookAt: new Date(),
+        },
+      }
+    );
 
-    orders.set(orderId, {
-      ...existing,
-      status: paymentInfo.status || "unknown",
-      paymentId: String(paymentInfo.id),
-      live_mode: Boolean(paymentInfo.live_mode),
-      transaction_amount: paymentInfo.transaction_amount ?? null,
-      updatedAt: new Date().toISOString(),
-      lastWebhookAt: new Date().toISOString(),
+    console.log("[mp] payment updated:", {
+      orderId,
+      paymentId: paymentInfo.id,
+      status: paymentInfo.status,
+      status_detail: paymentInfo.status_detail,
+      transaction_amount: paymentInfo.transaction_amount,
+      live_mode: paymentInfo.live_mode,
     });
   } catch (e) {
-    console.error("Error procesando webhook:", e);
+    console.error("[mp] Error procesando webhook:", e);
   }
 });
 
-const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
-  console.log(`Backend escuchando en http://localhost:${PORT}`);
-});
+async function ensureSuperAdmin() {
+  const username = process.env.SUPERADMIN_USERNAME;
+  const password = process.env.SUPERADMIN_PASSWORD;
+
+  if (!username || !password) {
+    console.log("[seed] SUPERADMIN_USERNAME/PASSWORD not set, skipping seed");
+    return;
+  }
+
+  const existing = await User.findOne({ username }).exec();
+  if (existing) {
+    console.log(`[seed] SUPER_ADMIN exists (${username})`);
+    return;
+  }
+
+  const passwordHash = await bcrypt.hash(password, 10);
+  await User.create({ username, passwordHash, role: "SUPER_ADMIN", active: true });
+  console.log(`[seed] SUPER_ADMIN created (${username})`);
+}
+
+async function start() {
+  try {
+    if (!process.env.MONGO_URI) throw new Error("Missing MONGO_URI in .env");
+    if (!process.env.JWT_SECRET) throw new Error("Missing JWT_SECRET in .env");
+    if (!process.env.MP_ACCESS_TOKEN) throw new Error("Missing MP_ACCESS_TOKEN in .env");
+
+    await mongoose.connect(process.env.MONGO_URI);
+    console.log("[db] connected");
+
+    await ensureSuperAdmin();
+
+    const PORT = process.env.PORT || 3001;
+    app.listen(PORT, () => console.log(`Backend escuchando en http://localhost:${PORT}`));
+  } catch (e) {
+    console.error("[startup] error:", e);
+    process.exit(1);
+  }
+}
+
+start();
