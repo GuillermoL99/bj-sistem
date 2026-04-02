@@ -6,6 +6,9 @@ import AdminLayout from "./pages/admin/AdminLayout";
 import AdminLogin from "./pages/admin/AdminLogin";
 import UsersPage from "./pages/admin/UserPages";
 import ScanPage from "./pages/admin/ScanPage";
+import TicketsPage from "./pages/admin/ticketsPage";
+import ClientsPage from "./pages/admin/clientsPage";
+import ClientOrderDetailPage from "./pages/admin/ClientOrderDetailPage";
 
 export default function App() {
   return (
@@ -18,6 +21,9 @@ export default function App() {
         <Route index element={<Navigate to="/admin/scan" replace />} />
         <Route path="scan" element={<ScanPage />} />
         <Route path="users" element={<UsersPage />} />
+        <Route path="tickets" element={<TicketsPage />} />
+        <Route path="clients" element={<ClientsPage />} />
+        <Route path="clients/:orderId" element={<ClientOrderDetailPage />} />
       </Route>
 
       <Route path="/success" element={<Result />} />

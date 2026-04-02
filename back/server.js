@@ -13,6 +13,7 @@ import publicTicketsRoutes from "./src/routes/publicTickets.js";
 import User from "./src/models/User.js";
 import Order from "./src/models/Orders.js";
 import TicketType from "./src/models/TicketType.js";
+import adminOrders from "./src/routes/adminOrders.js";
 
 const app = express();
 
@@ -29,6 +30,7 @@ app.use("/admin/users", adminUsersRoutes);
 
 app.use("/admin/tickets", adminTicketsRoutes);
 app.use("/tickets", publicTicketsRoutes);
+app.use("/admin", adminOrders);
 
 app.get("/orders/:orderId", async (req, res) => {
   const { orderId } = req.params;
@@ -50,23 +52,48 @@ const mpClient = new MercadoPagoConfig({
   accessToken: process.env.MP_ACCESS_TOKEN,
 });
 
-app.post("/mp/create-preference", async (req, res) => {
+app.post("/checkout", async (req, res) => {
   try {
-    const { ticketId, quantity = 1, buyer_email } = req.body || {};
+    let { ticketId, quantity = 1, buyer_email, buyer_dni, buyer_birthdate,  buyer_firstName, buyer_lastName } = req.body || {};
+
     const qty = Number(quantity);
 
+    // Validaciones básicas
     if (!ticketId) return res.status(400).json({ error: "missing_ticketId" });
+
     if (!Number.isInteger(qty) || qty < 1 || qty > 3) {
       return res.status(400).json({ error: "invalid_quantity" });
     }
 
+    buyer_email = String(buyer_email || "").trim();
+    buyer_dni = String(buyer_dni || "").trim();
+    buyer_birthdate = String(buyer_birthdate || "").trim();
+    buyer_firstName = String(buyer_firstName || "").trim();
+    buyer_lastName = String(buyer_lastName || "").trim();
+
+    if (!buyer_email || !buyer_email.includes("@")) {
+      return res.status(400).json({ error: "invalid_email" });
+    }
+
+    if (!/^[0-9]{7,9}$/.test(buyer_dni)) {
+      return res.status(400).json({ error: "invalid_dni" });
+    }
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(buyer_birthdate)) {
+      return res.status(400).json({ error: "invalid_birthdate" });
+    }
+    if (!buyer_firstName) return res.status(400).json({ error: "invalid_firstName" });
+
+    if (!buyer_lastName) return res.status(400).json({ error: "invalid_lastName" });
+
+    // Ticket existe y está activo
     const ticket = await TicketType.findById(ticketId).lean();
     if (!ticket || ticket.active === false) {
       return res.status(404).json({ error: "ticket_not_found" });
     }
 
-    // No descontamos acá, pero validamos stock para evitar vender de más
-    if (ticket.stock < qty) {
+    // Validar stock (no descontamos aún)
+    if (Number(ticket.stock) < qty) {
       return res.status(400).json({ error: "no_stock" });
     }
 
@@ -78,11 +105,60 @@ app.post("/mp/create-preference", async (req, res) => {
       title: ticket.name,
       unit_price: Number(ticket.priceARS),
       quantity: qty,
-      buyer_email: buyer_email || null,
+      buyer_email,
+      buyer_dni,
+      buyer_birthdate,
+      buyer_firstName,
+      buyer_lastName,
       status: "created",
       currency_id: "ARS",
-      // stockDeducted: false, // opcional (si tu schema tiene default, no hace falta)
     });
+
+    res.status(201).json({ orderId });
+  } catch (e) {
+    console.error("[checkout] error:", e);
+    res.status(500).json({ error: "server_error" });
+  }
+});
+
+
+app.post("/mp/create-preference", async (req, res) => {
+  try {
+    const { orderId } = req.body || {};
+    if (!orderId) return res.status(400).json({ error: "missing_orderId" });
+
+    const order = await Order.findOne({ orderId }).lean();
+    if (!order) return res.status(404).json({ error: "order_not_found", orderId });
+
+    console.log("[mp] FRONTEND_URL =", process.env.FRONTEND_URL);
+
+    // Validar que la order tenga lo necesario
+    const qty = Number(order.quantity);
+    if (!order.ticketId) return res.status(400).json({ error: "order_missing_ticketId" });
+    if (!Number.isInteger(qty) || qty < 1 || qty > 3) {
+      return res.status(400).json({ error: "invalid_quantity" });
+    }
+
+    const ticket = await TicketType.findById(order.ticketId).lean();
+    if (!ticket || ticket.active === false) {
+      return res.status(404).json({ error: "ticket_not_found" });
+    }
+
+    // Revalidar stock al momento de crear preference
+    if (Number(ticket.stock) < qty) {
+      return res.status(400).json({ error: "no_stock" });
+    }
+
+    const FRONTEND_BASE = (process.env.FRONTEND_URL || "http://localhost:5173")
+      .trim()
+      .replace(/\/+$/, "");
+
+    const backUrls = {
+      success: `${FRONTEND_BASE}/success?orderId=${order.orderId}`,
+      pending: `${FRONTEND_BASE}/pending?orderId=${order.orderId}`,
+      failure: `${FRONTEND_BASE}/failure?orderId=${order.orderId}`,
+    };
+    console.log("[mp] backUrls =", backUrls);
 
     const preference = new Preference(mpClient);
     const webhookUrl = buildWebhookUrl();
@@ -91,46 +167,51 @@ app.post("/mp/create-preference", async (req, res) => {
       body: {
         items: [
           {
-            title: ticket.name,
+            title: order.title || ticket.name,
             quantity: qty,
-            unit_price: Number(ticket.priceARS),
-            currency_id: "ARS",
+            unit_price: Number(order.unit_price ?? ticket.priceARS),
+            currency_id: order.currency_id || "ARS",
           },
         ],
-        payer: buyer_email ? { email: buyer_email } : undefined,
-        external_reference: orderId,
-        back_urls: {
-          success: "http://localhost:5173/success",
-          pending: "http://localhost:5173/pending",
-          failure: "http://localhost:5173/failure",
+        metadata: {
+          orderId: order.orderId,
+          buyer_email: order.buyer_email || null,
+          buyer_dni: order.buyer_dni || null,
+          buyer_birthdate: order.buyer_birthdate || null,
         },
+        external_reference: order.orderId,
         notification_url: webhookUrl || undefined,
+
+        // compat: algunos validadores esperan back_url (singular)
+        back_urls: backUrls,
+        back_url: backUrls,
+
+        
       },
     });
 
+    const pref = result?.id ? result : result?.body || result;
+
     await Order.updateOne(
-      { orderId },
+      { orderId: order.orderId },
       {
         $set: {
-          preferenceId: result.id || null,
-          init_point: result.init_point || null,
-          sandbox_init_point: result.sandbox_init_point || null,
+          preferenceId: pref?.id || null,
+          init_point: pref?.init_point || null,
+          sandbox_init_point: pref?.sandbox_init_point || null,
         },
       }
-    );
+    ).exec();
 
     res.json({
-      orderId,
-      preferenceId: result.id,
-      init_point: result.init_point,
-      sandbox_init_point: result.sandbox_init_point,
+      orderId: order.orderId,
+      init_point: pref?.init_point,
+      sandbox_init_point: pref?.sandbox_init_point,
+      preferenceId: pref?.id,
     });
-  } catch (err) {
-    console.error("[mp] Error creando preferencia:", err);
-    res.status(500).json({
-      error: "Error creando preferencia",
-      details: String(err?.message || err),
-    });
+  } catch (e) {
+    console.error("[mp] create-preference error:", e);
+    res.status(500).json({ error: "server_error" });
   }
 });
 

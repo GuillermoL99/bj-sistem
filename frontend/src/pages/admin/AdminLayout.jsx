@@ -28,13 +28,19 @@ export default function AdminLayout() {
 
   const homePath = useMemo(() => {
     if (!me) return "/admin/login";
-    return me.role === "SUPER_ADMIN" ? "/admin/users" : "/admin/scan";
+    // recomendado: que el super admin caiga en Entradas
+    return me.role === "SUPER_ADMIN" ? "/admin/tickets" : "/admin/scan";
   }, [me]);
 
-  // Guard: si STAFF intenta entrar a users, redirigirlo
+  // Guard: si STAFF intenta entrar a rutas de super admin, redirigirlo
   useEffect(() => {
     if (!me) return;
-    if (me.role !== "SUPER_ADMIN" && location.pathname.startsWith("/admin/users")) {
+
+    const isSuperAdminOnly =
+      location.pathname.startsWith("/admin/users") ||
+      location.pathname.startsWith("/admin/tickets") ||
+      location.pathname.startsWith("/admin/clients");
+    if (me.role !== "SUPER_ADMIN" && isSuperAdminOnly) {
       nav("/admin/scan", { replace: true });
     }
   }, [me, location.pathname, nav]);
@@ -78,11 +84,48 @@ export default function AdminLayout() {
 
           <nav className="adminNav">
             {me.role === "SUPER_ADMIN" ? (
-              <Link className={location.pathname.startsWith("/admin/users") ? "adminLink active" : "adminLink"} to="/admin/users">
-                Usuarios
-              </Link>
+              <>
+                <Link
+                  className={
+                    location.pathname.startsWith("/admin/tickets")
+                      ? "adminLink active"
+                      : "adminLink"
+                  }
+                  to="/admin/tickets"
+                >
+                  Entradas
+                </Link>
+
+                <Link
+                  className={
+                    location.pathname.startsWith("/admin/users")
+                      ? "adminLink active"
+                      : "adminLink"
+                  }
+                  to="/admin/users"
+                >
+                  Usuarios
+                </Link>
+                <Link
+  className={
+    location.pathname.startsWith("/admin/clients")
+      ? "adminLink active"
+      : "adminLink"
+  }
+  to="/admin/clients"
+>
+  Clientes
+</Link>
+              </>
             ) : (
-              <Link className={location.pathname.startsWith("/admin/scan") ? "adminLink active" : "adminLink"} to="/admin/scan">
+              <Link
+                className={
+                  location.pathname.startsWith("/admin/scan")
+                    ? "adminLink active"
+                    : "adminLink"
+                }
+                to="/admin/scan"
+              >
                 Escanear
               </Link>
             )}

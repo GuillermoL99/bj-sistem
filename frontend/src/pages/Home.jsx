@@ -1,63 +1,247 @@
+
+
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Layout from "../components/Layout";
 import Card from "../components/Card";
 import Button from "../components/Button";
 import { createPreference } from "../api/mp";
+import { getTickets } from "../api/tickets";
+import { checkout } from "../api/checkout";
+
+function TicketBuyCard({ t, paying, onPay }) {
+  const stock = Number(t.stock ?? 0);
+  const maxQty = Math.max(0, Math.min(3, stock));
+
+  const [qty, setQty] = useState(1);
+  const [open, setOpen] = useState(false);
+
+  const [buyerEmail, setBuyerEmail] = useState("");
+  const [buyerDni, setBuyerDni] = useState("");
+  const [buyerBirthdate, setBuyerBirthdate] = useState("");
+  const [buyerFirstName, setBuyerFirstName] = useState("");
+  const [buyerLastName, setBuyerLastName] = useState("");
+
+  // Si cambia el stock (por refresh), ajustamos qty
+  useEffect(() => {
+    setQty((q) => {
+      if (maxQty <= 0) return 1;
+      return Math.min(Math.max(1, q), maxQty);
+    });
+  }, [maxQty]);
+
+  const total = useMemo(() => Number(t.priceARS ?? 0) * qty, [t.priceARS, qty]);
+  const disabled = paying || maxQty === 0;
+
+  return (
+    <section className="card">
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+        <div style={{ minWidth: 0 }}>
+          <h2 style={{ margin: 0, fontSize: 20, lineHeight: 1.25 }}>{t.name}</h2>
+          <p style={{ margin: "6px 0 0", color: "var(--muted)" }}>
+            <span className="mono">{t.priceARS} ARS</span> por unidad
+          </p>
+        </div>
+
+        <span className={`badge ${stock > 0 ? "ok" : "bad"}`}>
+          <span className="dot" />
+          {stock > 0 ? "Disponible" : "Sin stock"}
+        </span>
+      </div>
+
+      <div className="hr" />
+
+      <div className="row">
+        <div className="label">Stock</div>
+        <div className="value mono">{stock}</div>
+      </div>
+
+      <div className="row" style={{ alignItems: "center" }}>
+        <div className="label">Cantidad</div>
+
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <button
+            className="btn"
+            type="button"
+            onClick={() => setQty((q) => Math.max(1, q - 1))}
+            disabled={paying || qty === 1}
+            aria-label="Disminuir cantidad"
+          >
+            −
+          </button>
+
+          <div className="value mono" style={{ minWidth: 28, textAlign: "center" }}>
+            {qty}
+          </div>
+
+          <button
+            className="btn"
+            type="button"
+            onClick={() => setQty((q) => Math.min(maxQty || 1, q + 1))}
+            disabled={paying || qty >= (maxQty || 1)}
+            aria-label="Aumentar cantidad"
+          >
+            +
+          </button>
+        </div>
+      </div>
+
+      <div className="row">
+        <div className="label">Total</div>
+        <div className="value">{total} ARS</div>
+      </div>
+
+      <div className="hr" />
+
+      <Button variant="primary" onClick={() => setOpen((v) => !v)} disabled={disabled}>
+        {paying ? "Creando pago..." : stock > 0 ? (open ? "Cerrar" : "Pagar") : "Sin stock"}
+      </Button>
+
+      {open && (
+        <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+          <div className="row" style={{ alignItems: "center" }}>
+  <div className="label">Nombre</div>
+  <input
+    value={buyerFirstName}
+    onChange={(e) => setBuyerFirstName(e.target.value)}
+    placeholder="Juan"
+    disabled={paying}
+    style={{ flex: 1, padding: 10, borderRadius: 10, border: "1px solid var(--border)" }}
+  />
+</div>
+
+<div className="row" style={{ alignItems: "center" }}>
+  <div className="label">Apellido</div>
+  <input
+    value={buyerLastName}
+    onChange={(e) => setBuyerLastName(e.target.value)}
+    placeholder="Pérez"
+    disabled={paying}
+    style={{ flex: 1, padding: 10, borderRadius: 10, border: "1px solid var(--border)" }}
+  />
+</div>
+          <div className="row" style={{ alignItems: "center" }}>
+            <div className="label">Email</div>
+            <input
+              type="email"
+              value={buyerEmail}
+              onChange={(e) => setBuyerEmail(e.target.value)}
+              placeholder="tu@mail.com"
+              disabled={paying}
+              style={{ flex: 1, padding: 10, borderRadius: 10, border: "1px solid var(--border)" }}
+            />
+          </div>
+
+          <div className="row" style={{ alignItems: "center" }}>
+            <div className="label">DNI</div>
+            <input
+              inputMode="numeric"
+              value={buyerDni}
+              onChange={(e) => setBuyerDni(e.target.value.replace(/\D/g, ""))}
+              placeholder="12345678"
+              disabled={paying}
+              style={{ flex: 1, padding: 10, borderRadius: 10, border: "1px solid var(--border)" }}
+            />
+          </div>
+
+          <div className="row" style={{ alignItems: "center" }}>
+            <div className="label">Nacimiento</div>
+            <input
+              type="date"
+              value={buyerBirthdate}
+              onChange={(e) => setBuyerBirthdate(e.target.value)}
+              disabled={paying}
+              style={{ flex: 1, padding: 10, borderRadius: 10, border: "1px solid var(--border)" }}
+            />
+          </div>
+
+          <Button
+            variant="primary"
+            onClick={() =>
+              onPay(t, qty, {
+                buyer_email: buyerEmail,
+                buyer_dni: buyerDni,
+                buyer_birthdate: buyerBirthdate,
+                buyer_firstName: buyerFirstName,
+                buyer_lastName: buyerLastName,
+              })
+            }
+            disabled={paying || !buyerEmail.trim() || !buyerDni.trim() || !buyerBirthdate.trim()}
+          >
+            {paying ? "Creando pago..." : "Continuar a pago"}
+          </Button>
+
+          <p style={{ margin: 0, color: "var(--muted)" }}>Máximo 3 entradas por compra.</p>
+        </div>
+      )}
+    </section>
+  );
+}
 
 export default function Home() {
-  // IMPORTANTE:
-  // 1) Creá un TicketType en tu DB (desde admin más adelante o directo en Mongo).
-  // 2) Copiá su "id" (ObjectId) y pegalo acá.
-  const TICKET_ID = "69cce18fbb6b9de5728e4ac0";
-
-  // Por ahora dejamos estos hardcodeados para no complicar la UI todavía.
-  // Más adelante los vamos a traer desde GET /tickets.
-  const UNIT_PRICE = 10; // ARS
-  const PRODUCT_NAME = "Entrada General";
-
   const nav = useNavigate();
 
-  const [loading, setLoading] = useState(false);
+  const [ticketsLoading, setTicketsLoading] = useState(true);
+  const [ticketsError, setTicketsError] = useState(null);
+  const [tickets, setTickets] = useState([]);
+
+  const [paying, setPaying] = useState(false);
   const [error, setError] = useState(null);
+
   const [lastOrderId, setLastOrderId] = useState(null);
-
-  const [quantity, setQuantity] = useState(1);
-
-  const total = useMemo(() => UNIT_PRICE * quantity, [quantity]);
 
   useEffect(() => {
     setLastOrderId(localStorage.getItem("lastOrderId"));
   }, []);
 
-  async function pagar() {
-    setLoading(true);
+  async function loadTickets() {
+    setTicketsLoading(true);
+    setTicketsError(null);
+    try {
+      const data = await getTickets();
+      setTickets(data?.tickets || []);
+    } catch (e) {
+      setTicketsError(String(e?.message || e));
+    } finally {
+      setTicketsLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadTickets();
+  }, []);
+
+  async function pay(ticket, quantity, buyer) {
+    setPaying(true);
     setError(null);
 
     try {
-      if (!TICKET_ID || TICKET_ID === "blablabla") {
-        throw new Error(
-          "Falta configurar TICKET_ID en Home.jsx. Pegá el id de tu entrada (TicketType) desde Mongo o desde GET /tickets."
-        );
-      }
+      const stock = Number(ticket.stock ?? 0);
+      if (stock <= 0) throw new Error("No hay stock disponible para esta entrada.");
+      if (quantity > stock) throw new Error("La cantidad supera el stock disponible.");
 
-      const data = await createPreference({
-        ticketId: TICKET_ID,
+      // 1) checkout -> orderId
+      const c = await checkout({
+        ticketId: ticket.id,
         quantity,
-        buyer_email: "comprador@test.com",
+        ...buyer,
       });
 
-      localStorage.setItem("lastOrderId", data.orderId);
-      setLastOrderId(data.orderId);
+      localStorage.setItem("lastOrderId", c.orderId);
+      setLastOrderId(c.orderId);
 
-      const url = data.init_point || data.sandbox_init_point;
+      // 2) preference con orderId
+      const data = await createPreference({ orderId: c.orderId });
+
+      // en sandbox, preferimos sandbox_init_point
+      const url = data.sandbox_init_point || data.init_point;
       if (!url) throw new Error("No vino init_point/sandbox_init_point");
 
       window.location.href = url;
     } catch (e) {
       setError(String(e?.message || e));
     } finally {
-      setLoading(false);
+      setPaying(false);
     }
   }
 
@@ -67,68 +251,52 @@ export default function Home() {
 
   return (
     <Layout>
-      <div className="grid">
-        <Card title="Entradas">
-          <div className="hr" />
+      <div className="grid" style={{ gridTemplateColumns: "1fr" }}>
+        <Card>
+          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+            <div>
+              <h2 style={{ margin: 0, fontSize: 22 }}>Entradas</h2>
+              <p style={{ margin: "6px 0 0", color: "var(--muted)", lineHeight: 1.55 }}>
+                Elegí tu entrada y pagá con Mercado Pago.
+              </p>
+            </div>
 
-          <div className="row">
-            <div className="label">Producto</div>
-            <div className="value">{PRODUCT_NAME}</div>
-          </div>
-
-          <div className="row">
-            <div className="label">Precio unitario</div>
-            <div className="value">{UNIT_PRICE} ARS</div>
-          </div>
-
-          <div className="row" style={{ alignItems: "center" }}>
-            <div className="label">Cantidad</div>
-
-            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-              <button
-                className="btn"
-                type="button"
-                onClick={() => setQuantity((q) => Math.max(1, q - 1))}
-                disabled={loading || quantity === 1}
-                aria-label="Disminuir cantidad"
-              >
-                −
-              </button>
-
-              <div className="value mono" style={{ minWidth: 28, textAlign: "center" }}>
-                {quantity}
-              </div>
-
-              <button
-                className="btn"
-                type="button"
-                onClick={() => setQuantity((q) => Math.min(3, q + 1))}
-                disabled={loading || quantity === 3}
-                aria-label="Aumentar cantidad"
-              >
-                +
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <button className="btn" type="button" onClick={loadTickets} disabled={ticketsLoading || paying}>
+                {ticketsLoading ? "Cargando..." : "Actualizar"}
               </button>
             </div>
           </div>
 
-          <div className="row">
-            <div className="label">Total</div>
-            <div className="value">{total} ARS</div>
-          </div>
-
           <div className="hr" />
 
-          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-            <div style={{ flex: 1 }}>
-              <Button variant="primary" onClick={pagar} disabled={loading}>
-                {loading ? "Creando pago..." : "Pagar con Mercado Pago"}
-              </Button>
-            </div>
-          </div>
+          {ticketsLoading && <p style={{ margin: 0, color: "var(--muted)" }}>Cargando entradas...</p>}
 
-          <p style={{ marginTop: 12, marginBottom: 0, color: "var(--muted)" }}>
-            Máximo 3 entradas por compra.
-          </p>
+          {!ticketsLoading && ticketsError && (
+            <div className="notice error" style={{ marginTop: 12 }}>
+              <div style={{ fontWeight: 700, marginBottom: 6 }}>Error</div>
+              <div className="mono">{ticketsError}</div>
+            </div>
+          )}
+
+          {!ticketsLoading && !ticketsError && tickets.length === 0 && (
+            <p style={{ margin: 0, color: "var(--muted)" }}>No hay entradas disponibles.</p>
+          )}
+
+          {!ticketsLoading && !ticketsError && tickets.length > 0 && (
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+                gap: 12,
+                alignItems: "start",
+              }}
+            >
+              {tickets.map((t) => (
+                <TicketBuyCard key={t.id} t={t} paying={paying} onPay={pay} />
+              ))}
+            </div>
+          )}
 
           {error && (
             <div className="notice error" style={{ marginTop: 12 }}>
@@ -136,20 +304,6 @@ export default function Home() {
               <div className="mono">{error}</div>
             </div>
           )}
-
-          {/* Si querés, esto lo podés usar para debug */}
-          {lastOrderId && (
-            <p style={{ marginTop: 12, marginBottom: 0, color: "var(--muted)" }}>
-              Última orden: <span className="mono">{lastOrderId}</span>
-            </p>
-          )}
-
-          {/* Botón/atajo al login admin (si lo estabas usando antes) */}
-          <div style={{ marginTop: 12 }}>
-            <button className="btn" type="button" onClick={goToAdminLogin}>
-              Admin
-            </button>
-          </div>
         </Card>
       </div>
     </Layout>

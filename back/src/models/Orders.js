@@ -15,6 +15,10 @@ const orderSchema = new mongoose.Schema(
     unit_price: { type: Number, default: null },
     quantity: { type: Number, default: null },
     buyer_email: { type: String, default: null },
+    buyer_dni: { type: String, default: null },
+    buyer_birthdate: { type: String, default: null }, // "YYYY-MM-DD"
+    buyer_firstName: { type: String, default: null },
+    buyer_lastName: { type: String, default: null },
 
     currency_id: { type: String, default: "ARS" },
 
