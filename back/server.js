@@ -9,11 +9,13 @@ import authRoutes from "./src/routes/auth.js";
 import adminUsersRoutes from "./src/routes/adminUsers.js";
 import adminTicketsRoutes from "./src/routes/adminTickets.js";
 import publicTicketsRoutes from "./src/routes/publicTickets.js";
+import { sendTicketQR } from "./src/utils/sendTicketQR.js"; // <-- AJUSTADO path
 
 import User from "./src/models/User.js";
 import Order from "./src/models/Orders.js";
 import TicketType from "./src/models/TicketType.js";
 import adminOrders from "./src/routes/adminOrders.js";
+import adminScan from "./src/routes/adminScan.js";
 
 const app = express();
 
@@ -27,17 +29,15 @@ app.get("/health", (req, res) =>
 
 app.use("/auth", authRoutes);
 app.use("/admin/users", adminUsersRoutes);
-
 app.use("/admin/tickets", adminTicketsRoutes);
 app.use("/tickets", publicTicketsRoutes);
 app.use("/admin", adminOrders);
+app.use("/admin", adminScan);
 
 app.get("/orders/:orderId", async (req, res) => {
   const { orderId } = req.params;
-
   const order = await Order.findOne({ orderId }).lean();
   if (!order) return res.status(404).json({ error: "order_not_found", orderId });
-
   res.json(order);
 });
 
@@ -55,12 +55,10 @@ const mpClient = new MercadoPagoConfig({
 app.post("/checkout", async (req, res) => {
   try {
     let { ticketId, quantity = 1, buyer_email, buyer_dni, buyer_birthdate,  buyer_firstName, buyer_lastName } = req.body || {};
-
     const qty = Number(quantity);
 
     // Validaciones básicas
     if (!ticketId) return res.status(400).json({ error: "missing_ticketId" });
-
     if (!Number.isInteger(qty) || qty < 1 || qty > 3) {
       return res.status(400).json({ error: "invalid_quantity" });
     }
@@ -74,16 +72,13 @@ app.post("/checkout", async (req, res) => {
     if (!buyer_email || !buyer_email.includes("@")) {
       return res.status(400).json({ error: "invalid_email" });
     }
-
     if (!/^[0-9]{7,9}$/.test(buyer_dni)) {
       return res.status(400).json({ error: "invalid_dni" });
     }
-
     if (!/^\d{4}-\d{2}-\d{2}$/.test(buyer_birthdate)) {
       return res.status(400).json({ error: "invalid_birthdate" });
     }
     if (!buyer_firstName) return res.status(400).json({ error: "invalid_firstName" });
-
     if (!buyer_lastName) return res.status(400).json({ error: "invalid_lastName" });
 
     // Ticket existe y está activo
@@ -121,7 +116,6 @@ app.post("/checkout", async (req, res) => {
   }
 });
 
-
 app.post("/mp/create-preference", async (req, res) => {
   try {
     const { orderId } = req.body || {};
@@ -131,8 +125,6 @@ app.post("/mp/create-preference", async (req, res) => {
     if (!order) return res.status(404).json({ error: "order_not_found", orderId });
 
     console.log("[mp] FRONTEND_URL =", process.env.FRONTEND_URL);
-
-    // Validar que la order tenga lo necesario
     const qty = Number(order.quantity);
     if (!order.ticketId) return res.status(400).json({ error: "order_missing_ticketId" });
     if (!Number.isInteger(qty) || qty < 1 || qty > 3) {
@@ -144,7 +136,6 @@ app.post("/mp/create-preference", async (req, res) => {
       return res.status(404).json({ error: "ticket_not_found" });
     }
 
-    // Revalidar stock al momento de crear preference
     if (Number(ticket.stock) < qty) {
       return res.status(400).json({ error: "no_stock" });
     }
@@ -181,12 +172,8 @@ app.post("/mp/create-preference", async (req, res) => {
         },
         external_reference: order.orderId,
         notification_url: webhookUrl || undefined,
-
-        // compat: algunos validadores esperan back_url (singular)
         back_urls: backUrls,
         back_url: backUrls,
-
-        
       },
     });
 
@@ -230,7 +217,6 @@ app.post("/mp/webhook", async (req, res) => {
       req.body?.data?.id ||
       req.body?.id ||
       req.body?.resource;
-
     if (!paymentId) return;
 
     const payment = new Payment(mpClient);
@@ -253,14 +239,11 @@ app.post("/mp/webhook", async (req, res) => {
     const newStatus = paymentInfo.status || "unknown";
 
     // ===== DESCUENTO DE STOCK IDEMPOTENTE (ANTI DOBLE WEBHOOK) =====
-    // OJO: esto requiere que el schema de Order tenga el campo:
-    // stockDeducted: { type: Boolean, default: false }
     if (newStatus === "approved") {
-      // Solo el primer webhook que logre setear stockDeducted=true va a descontar.
       const reserved = await Order.findOneAndUpdate(
         { orderId, stockDeducted: { $ne: true } },
         { $set: { stockDeducted: true } },
-        { new: false } // si devuelve null => ya estaba descontado
+        { new: false }
       ).exec();
 
       if (reserved) {
@@ -307,6 +290,45 @@ app.post("/mp/webhook", async (req, res) => {
       transaction_amount: paymentInfo.transaction_amount,
       live_mode: paymentInfo.live_mode,
     });
+
+    // === ENVÍO DE QR CUANDO SE APRUEBA EL PAGO ===
+    if (newStatus === "approved") {
+      // Generar código de 6 dígitos único
+      let ticketCode;
+      let attempts = 0;
+      do {
+        ticketCode = String(Math.floor(100000 + Math.random() * 900000));
+        const existing = await Order.findOne({ ticketCode });
+        if (!existing) break;
+        attempts++;
+      } while (attempts < 10);
+
+  const reserved = await Order.findOneAndUpdate(
+    { orderId, qrSent: { $ne: true } },
+        { $set: { qrSent: true, ticketCode } },
+    { new: false }
+  );
+
+  if (reserved) {
+    try {
+      await sendTicketQR(
+        reserved.buyer_email,
+        "¡Tu entrada para el evento!",
+        reserved.orderId,
+        {
+          title: reserved.title,
+          nombre: [reserved.buyer_firstName, reserved.buyer_lastName].filter(Boolean).join(" "),
+          dni: reserved.buyer_dni,
+              ticketCode,
+        }
+      );
+      console.log("[mp] QR enviado a:", reserved.buyer_email);
+    } catch (err) {
+      console.error("[mp] Error enviando QR:", err);
+    }
+  }
+}
+    // ================================
   } catch (e) {
     console.error("[mp] Error procesando webhook:", e);
   }

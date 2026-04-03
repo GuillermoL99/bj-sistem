@@ -38,9 +38,7 @@ function TicketBuyCard({ t, paying, onPay }) {
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
         <div style={{ minWidth: 0 }}>
           <h2 style={{ margin: 0, fontSize: 20, lineHeight: 1.25 }}>{t.name}</h2>
-          <p style={{ margin: "6px 0 0", color: "var(--muted)" }}>
-            <span className="mono">{t.priceARS} ARS</span> por unidad
-          </p>
+          
         </div>
 
         <span className={`badge ${stock > 0 ? "ok" : "bad"}`}>
@@ -56,35 +54,7 @@ function TicketBuyCard({ t, paying, onPay }) {
         <div className="value mono">{stock}</div>
       </div>
 
-      <div className="row" style={{ alignItems: "center" }}>
-        <div className="label">Cantidad</div>
-
-        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          <button
-            className="btn"
-            type="button"
-            onClick={() => setQty((q) => Math.max(1, q - 1))}
-            disabled={paying || qty === 1}
-            aria-label="Disminuir cantidad"
-          >
-            −
-          </button>
-
-          <div className="value mono" style={{ minWidth: 28, textAlign: "center" }}>
-            {qty}
-          </div>
-
-          <button
-            className="btn"
-            type="button"
-            onClick={() => setQty((q) => Math.min(maxQty || 1, q + 1))}
-            disabled={paying || qty >= (maxQty || 1)}
-            aria-label="Aumentar cantidad"
-          >
-            +
-          </button>
-        </div>
-      </div>
+      
 
       <div className="row">
         <div className="label">Total</div>
@@ -171,7 +141,7 @@ function TicketBuyCard({ t, paying, onPay }) {
             {paying ? "Creando pago..." : "Continuar a pago"}
           </Button>
 
-          <p style={{ margin: 0, color: "var(--muted)" }}>Máximo 3 entradas por compra.</p>
+          
         </div>
       )}
     </section>

@@ -56,7 +56,7 @@ export default function AdminLayout() {
   }
 
   return (
-    <div className="container">
+    <div className="container" style={{ width: "min(1600px, 100%)" }}>
       <div className="adminShell">
         <header className="adminHeader">
           <div className="adminTitle">

@@ -48,6 +48,12 @@ const orderSchema = new mongoose.Schema(
     sandbox_init_point: { type: String, default: null },
 
     lastWebhookAt: { type: Date, default: null },
+    qrSent: { type: Boolean, default: false },
+
+    ticketCode: { type: String, default: null, index: true, sparse: true },
+
+    scanned: { type: Boolean, default: false },
+    scannedAt: { type: Date, default: null },
   },
   { timestamps: true }
 );

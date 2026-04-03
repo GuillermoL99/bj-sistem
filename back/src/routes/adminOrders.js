@@ -123,4 +123,24 @@ router.get("/orders.csv", requireAuth(), requireRole("SUPER_ADMIN"), async (req,
   }
 });
 
+/**
+ * DELETE /admin/orders
+ * Body: { ids: ["_id1", "_id2", ...] }
+ * SUPER_ADMIN only
+ */
+router.delete("/orders", requireAuth(), requireRole("SUPER_ADMIN"), async (req, res) => {
+  try {
+    const { ids } = req.body;
+
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ error: "ids_required" });
+    }
+
+    const result = await Order.deleteMany({ _id: { $in: ids } });
+    return res.json({ deleted: result.deletedCount });
+  } catch (e) {
+    return res.status(500).json({ error: String(e?.message || e) });
+  }
+});
+
 export default router;

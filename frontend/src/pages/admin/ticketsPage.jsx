@@ -224,7 +224,7 @@ export default function TicketsPage() {
 
   return (
     <div className="adminPage">
-      <Card title="Entradas" subtitle="Cada entrada es un TicketType. Acá podés crear una VIP y aparecerá junto a la General en Home.">
+      <Card title="Entradas">
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           <span className="badge">
             <span className="dot" />
@@ -280,9 +280,6 @@ export default function TicketsPage() {
               </Button>
             </div>
 
-            <p style={{ margin: 0, color: "var(--muted)" }}>
-              Se crea como activa por defecto. Si la desactivás, no aparece en Home.
-            </p>
           </div>
         </form>
 
